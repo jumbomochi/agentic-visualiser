@@ -20,10 +20,27 @@ pub struct GameState {
 #[derive(Resource, Default)]
 pub struct EventQueue {
     pub events: VecDeque<ToolEvent>,
+    /// Track recently seen events to deduplicate
+    pub seen_events: std::collections::HashSet<String>,
 }
 
 impl EventQueue {
     pub fn push(&mut self, event: ToolEvent) {
+        // Create a unique key for deduplication
+        let key = format!("{}-{:?}", event.tool_use_id, event.event_type);
+
+        // Skip if we've seen this exact event recently
+        if self.seen_events.contains(&key) {
+            return;
+        }
+
+        self.seen_events.insert(key);
+
+        // Keep seen_events from growing too large
+        if self.seen_events.len() > 1000 {
+            self.seen_events.clear();
+        }
+
         self.events.push_back(event);
     }
 
