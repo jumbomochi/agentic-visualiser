@@ -82,7 +82,17 @@ pub fn process_events_system(
     mut agents: Query<(Entity, &Agent, &mut Transform, Option<&mut CurrentStation>), Without<MainAgent>>,
     mut main_agent: Query<(Entity, &mut Transform, &mut CurrentStation), With<MainAgent>>,
 ) {
+    // Process only a few events per frame to allow rendering between spawn/despawn
+    let mut events_processed = 0;
+    const MAX_EVENTS_PER_FRAME: usize = 3;
+
     while let Some(event) = event_queue.pop() {
+        events_processed += 1;
+        if events_processed > MAX_EVENTS_PER_FRAME {
+            // Re-queue the event for next frame
+            event_queue.events.push_front(event);
+            break;
+        }
         match event.event_type {
             EventType::PreToolUse => {
                 let station_type = StationType::for_tool(&event.tool_name);
@@ -102,19 +112,15 @@ pub fn process_events_system(
 
                         // Get sprite for this agent type
                         if let Some(image_handle) = sprite_assets.agents.get(&agent_type) {
+                            // Spawn at home station directly
                             let entity = commands
                                 .spawn((
                                     Sprite {
                                         image: image_handle.clone(),
-                                        custom_size: Some(Vec2::new(42.0, 42.0)),
+                                        custom_size: Some(Vec2::new(48.0, 48.0)),
                                         ..default()
                                     },
-                                    // Start at meeting area, will move to home station
-                                    Transform::from_xyz(
-                                        station_positions.meeting_area.x,
-                                        station_positions.meeting_area.y,
-                                        9.0,
-                                    ),
+                                    Transform::from_xyz(home_pos.x, home_pos.y, 10.0),
                                     Agent {
                                         id: event.tool_use_id.clone(),
                                         agent_type,
@@ -122,12 +128,8 @@ pub fn process_events_system(
                                     },
                                     CurrentStation { station: Some(home_station) },
                                     LabelStagger { index: stagger_index },
-                                    Speed(180.0), // Subagents move faster
+                                    Speed(180.0),
                                     AnimationController::default(),
-                                    MovementTarget {
-                                        position: home_pos,
-                                        station_type: Some(home_station),
-                                    },
                                 ))
                                 .with_children(|parent| {
                                     // Name label - staggered vertically based on index
@@ -188,12 +190,10 @@ pub fn process_events_system(
                 }
             }
             EventType::PostToolUse => {
-                // Tool completed
+                // Tool completed - despawn the subagent
                 if event.tool_name == "Task" {
-                    // Find and despawn the subagent
                     for (entity, agent, _transform, _) in agents.iter_mut() {
                         if agent.tool_use_id.as_ref() == Some(&event.tool_use_id) {
-                            // Remove from station occupancy
                             station_occupancy.remove_agent(entity);
                             commands.entity(entity).despawn_recursive();
                             game_state.agent_count = game_state.agent_count.saturating_sub(1);
