@@ -33,6 +33,14 @@ pub fn read_events_system(
         let trimmed = line.trim();
         if !trimmed.is_empty() {
             if let Some(event) = parse_event(trimmed) {
+                // Detect session change - mark for agent cleanup
+                let session_changed = game_state.session_id.as_ref()
+                    != Some(&event.session_id);
+
+                if session_changed {
+                    game_state.session_changed = true;
+                }
+
                 // Update game state
                 game_state.session_id = Some(event.session_id.clone());
                 game_state.current_tool = Some(event.tool_name.clone());

@@ -12,6 +12,8 @@ pub struct GameState {
     pub current_tool_input: Option<String>,
     pub agent_count: usize,
     pub events_processed: usize,
+    /// Flag indicating session changed - agents should be cleared
+    pub session_changed: bool,
 }
 
 /// Queue of tool events to process
@@ -83,9 +85,14 @@ impl Default for FileWatcherState {
             .join(".claude-visualizer")
             .join("events.jsonl");
 
+        // Start from end of file to skip historical events
+        let last_position = std::fs::metadata(&events_path)
+            .map(|m| m.len())
+            .unwrap_or(0);
+
         FileWatcherState {
             events_path,
-            last_position: 0,
+            last_position,
         }
     }
 }

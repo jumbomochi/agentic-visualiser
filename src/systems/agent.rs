@@ -210,6 +210,33 @@ pub fn process_events_system(
     }
 }
 
+/// System to clear all subagents when session changes
+pub fn handle_session_change_system(
+    mut commands: Commands,
+    mut game_state: ResMut<GameState>,
+    mut station_occupancy: ResMut<StationOccupancy>,
+    agents: Query<Entity, (With<Agent>, Without<MainAgent>)>,
+) {
+    if !game_state.session_changed {
+        return;
+    }
+
+    // Clear the flag
+    game_state.session_changed = false;
+
+    // Despawn all subagents
+    let mut count = 0;
+    for entity in agents.iter() {
+        station_occupancy.remove_agent(entity);
+        commands.entity(entity).despawn_recursive();
+        count += 1;
+    }
+
+    if count > 0 {
+        game_state.agent_count = 1; // Just main agent remains
+    }
+}
+
 /// System to update orbital positions when multiple agents are at the same station
 pub fn update_orbital_positions_system(
     station_occupancy: Res<StationOccupancy>,
@@ -242,7 +269,8 @@ impl Plugin for AgentPlugin {
                 spawn_main_agent.after(crate::sprites::generate_sprites),
             )
             .add_systems(Update, (
-                process_events_system,
+                handle_session_change_system,
+                process_events_system.after(handle_session_change_system),
                 update_orbital_positions_system.after(process_events_system),
             ));
     }
