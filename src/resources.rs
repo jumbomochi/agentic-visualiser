@@ -1,6 +1,7 @@
 use bevy::prelude::*;
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 
+use crate::components::StationType;
 use crate::events::ToolEvent;
 
 /// Shared game state resource
@@ -86,5 +87,57 @@ impl Default for FileWatcherState {
             events_path,
             last_position: 0,
         }
+    }
+}
+
+/// Tracks agents at each station for orbital positioning
+#[derive(Resource, Default)]
+pub struct StationOccupancy {
+    /// Maps station type to list of agent entity IDs currently there
+    pub agents_at_station: HashMap<StationType, Vec<Entity>>,
+}
+
+impl StationOccupancy {
+    /// Calculate orbital position for an agent at a station
+    /// Returns an offset from the station center
+    pub fn get_orbital_offset(&self, station: StationType, agent_entity: Entity) -> Vec2 {
+        let agents = self.agents_at_station.get(&station).map(|v| v.as_slice()).unwrap_or(&[]);
+
+        if agents.len() <= 1 {
+            return Vec2::ZERO;
+        }
+
+        // Find this agent's index in the station
+        let index = agents.iter().position(|&e| e == agent_entity).unwrap_or(0);
+
+        // Calculate orbital position
+        let orbit_radius = 45.0; // Distance from center
+        let total_agents = agents.len();
+        let angle = (index as f32 / total_agents as f32) * std::f32::consts::TAU;
+
+        Vec2::new(
+            angle.cos() * orbit_radius,
+            angle.sin() * orbit_radius,
+        )
+    }
+
+    /// Add an agent to a station
+    pub fn add_agent(&mut self, station: StationType, entity: Entity) {
+        // First remove from any other station
+        self.remove_agent(entity);
+        // Then add to new station
+        self.agents_at_station.entry(station).or_default().push(entity);
+    }
+
+    /// Remove an agent from all stations
+    pub fn remove_agent(&mut self, entity: Entity) {
+        for agents in self.agents_at_station.values_mut() {
+            agents.retain(|&e| e != entity);
+        }
+    }
+
+    /// Get the count of agents at a station
+    pub fn count_at_station(&self, station: StationType) -> usize {
+        self.agents_at_station.get(&station).map(|v| v.len()).unwrap_or(0)
     }
 }

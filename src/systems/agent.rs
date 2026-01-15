@@ -1,9 +1,8 @@
 use bevy::prelude::*;
-use rand::Rng;
 
 use crate::components::*;
 use crate::events::EventType;
-use crate::resources::{EventQueue, GameState, StationPositions};
+use crate::resources::{EventQueue, GameState, StationOccupancy, StationPositions};
 use crate::sprites::SpriteAssets;
 
 /// Marker for the main agent
@@ -14,6 +13,7 @@ pub struct MainAgent;
 pub fn spawn_main_agent(
     mut commands: Commands,
     mut game_state: ResMut<GameState>,
+    mut station_occupancy: ResMut<StationOccupancy>,
     station_positions: Res<StationPositions>,
     sprite_assets: Res<SpriteAssets>,
 ) {
@@ -21,7 +21,7 @@ pub fn spawn_main_agent(
 
     // Get sprite for main agent
     if let Some(image_handle) = sprite_assets.agents.get(&AgentType::Main) {
-        commands
+        let entity = commands
             .spawn((
                 Sprite {
                     image: image_handle.clone(),
@@ -35,6 +35,8 @@ pub fn spawn_main_agent(
                     tool_use_id: None,
                 },
                 MainAgent,
+                CurrentStation { station: Some(StationType::Center) },
+                LabelStagger { index: 0 },
                 Speed::default(),
                 AnimationController::default(),
             ))
@@ -47,6 +49,7 @@ pub fn spawn_main_agent(
                         ..default()
                     },
                     Transform::from_xyz(0.0, 32.0, 0.5),
+                    AgentLabel,
                 ));
                 parent.spawn((
                     Text2d::new("Main"),
@@ -56,8 +59,13 @@ pub fn spawn_main_agent(
                     },
                     TextColor(Color::WHITE),
                     Transform::from_xyz(0.0, 32.0, 1.0),
+                    AgentLabel,
                 ));
-            });
+            })
+            .id();
+
+        // Register with station occupancy
+        station_occupancy.add_agent(StationType::Center, entity);
     }
 
     game_state.agent_count = 1;
@@ -68,55 +76,64 @@ pub fn process_events_system(
     mut commands: Commands,
     mut event_queue: ResMut<EventQueue>,
     mut game_state: ResMut<GameState>,
+    mut station_occupancy: ResMut<StationOccupancy>,
     station_positions: Res<StationPositions>,
     sprite_assets: Res<SpriteAssets>,
-    mut agents: Query<(Entity, &Agent, &mut Transform), Without<MainAgent>>,
-    mut main_agent: Query<(Entity, &mut Transform), With<MainAgent>>,
+    mut agents: Query<(Entity, &Agent, &mut Transform, Option<&mut CurrentStation>), Without<MainAgent>>,
+    mut main_agent: Query<(Entity, &mut Transform, &mut CurrentStation), With<MainAgent>>,
 ) {
     while let Some(event) = event_queue.pop() {
         match event.event_type {
             EventType::PreToolUse => {
                 let station_type = StationType::for_tool(&event.tool_name);
-                let target_pos = station_positions.get(station_type);
+                let base_pos = station_positions.get(station_type);
 
                 // If it's a Task tool, spawn a new subagent
                 if event.tool_name == "Task" {
                     if let Some(subagent_type_str) = event.get_subagent_type() {
                         let agent_type = AgentType::from_str(&subagent_type_str);
 
-                        // Spawn at meeting area with slight random offset
-                        let mut rng = rand::thread_rng();
-                        let offset = Vec2::new(
-                            rng.gen_range(-30.0..30.0),
-                            rng.gen_range(-30.0..30.0),
-                        );
-                        let spawn_pos = station_positions.meeting_area + offset;
+                        // Spawn at the agent's home station (based on agent type)
+                        let home_station = agent_type.home_station();
+                        let home_pos = station_positions.get(home_station);
+
+                        // Calculate stagger index for labels
+                        let stagger_index = station_occupancy.count_at_station(home_station);
 
                         // Get sprite for this agent type
                         if let Some(image_handle) = sprite_assets.agents.get(&agent_type) {
-                            commands
+                            let entity = commands
                                 .spawn((
                                     Sprite {
                                         image: image_handle.clone(),
                                         custom_size: Some(Vec2::new(42.0, 42.0)),
                                         ..default()
                                     },
-                                    Transform::from_xyz(spawn_pos.x, spawn_pos.y, 9.0),
+                                    // Start at meeting area, will move to home station
+                                    Transform::from_xyz(
+                                        station_positions.meeting_area.x,
+                                        station_positions.meeting_area.y,
+                                        9.0,
+                                    ),
                                     Agent {
                                         id: event.tool_use_id.clone(),
                                         agent_type,
                                         tool_use_id: Some(event.tool_use_id.clone()),
                                     },
+                                    CurrentStation { station: Some(home_station) },
+                                    LabelStagger { index: stagger_index },
                                     Speed(180.0), // Subagents move faster
                                     AnimationController::default(),
                                     MovementTarget {
-                                        position: spawn_pos,
-                                        station_type: Some(StationType::MeetingArea),
+                                        position: home_pos,
+                                        station_type: Some(home_station),
                                     },
                                 ))
                                 .with_children(|parent| {
-                                    // Name label
+                                    // Name label - staggered vertically based on index
                                     let label_color = agent_type.color();
+                                    let label_y_offset = 28.0 + (stagger_index as f32 * 16.0);
+
                                     parent.spawn((
                                         Sprite {
                                             color: Color::srgba(
@@ -128,7 +145,8 @@ pub fn process_events_system(
                                             custom_size: Some(Vec2::new(50.0, 14.0)),
                                             ..default()
                                         },
-                                        Transform::from_xyz(0.0, 28.0, 0.5),
+                                        Transform::from_xyz(0.0, label_y_offset, 0.5),
+                                        AgentLabel,
                                     ));
                                     parent.spawn((
                                         Text2d::new(agent_type.label()),
@@ -137,16 +155,31 @@ pub fn process_events_system(
                                             ..default()
                                         },
                                         TextColor(Color::WHITE),
-                                        Transform::from_xyz(0.0, 28.0, 1.0),
+                                        Transform::from_xyz(0.0, label_y_offset, 1.0),
+                                        AgentLabel,
                                     ));
-                                });
+                                })
+                                .id();
 
+                            // Register with station occupancy
+                            station_occupancy.add_agent(home_station, entity);
                             game_state.agent_count += 1;
                         }
                     }
                 } else {
                     // Move main agent to the appropriate station
-                    if let Ok((entity, _transform)) = main_agent.get_single_mut() {
+                    if let Ok((entity, _transform, mut current_station)) = main_agent.get_single_mut() {
+                        // Update station occupancy
+                        if current_station.station.is_some() {
+                            station_occupancy.remove_agent(entity);
+                        }
+                        station_occupancy.add_agent(station_type, entity);
+                        current_station.station = Some(station_type);
+
+                        // Calculate orbital offset
+                        let orbital_offset = station_occupancy.get_orbital_offset(station_type, entity);
+                        let target_pos = base_pos + orbital_offset;
+
                         commands.entity(entity).insert(MovementTarget {
                             position: target_pos,
                             station_type: Some(station_type),
@@ -157,10 +190,11 @@ pub fn process_events_system(
             EventType::PostToolUse => {
                 // Tool completed
                 if event.tool_name == "Task" {
-                    // Find and despawn the subagent with fade out effect
-                    for (entity, agent, _transform) in agents.iter_mut() {
+                    // Find and despawn the subagent
+                    for (entity, agent, _transform, _) in agents.iter_mut() {
                         if agent.tool_use_id.as_ref() == Some(&event.tool_use_id) {
-                            // TODO: Add fade out animation
+                            // Remove from station occupancy
+                            station_occupancy.remove_agent(entity);
                             commands.entity(entity).despawn_recursive();
                             game_state.agent_count = game_state.agent_count.saturating_sub(1);
                             break;
@@ -176,16 +210,40 @@ pub fn process_events_system(
     }
 }
 
+/// System to update orbital positions when multiple agents are at the same station
+pub fn update_orbital_positions_system(
+    station_occupancy: Res<StationOccupancy>,
+    station_positions: Res<StationPositions>,
+    mut agents: Query<(Entity, &CurrentStation, &mut MovementTarget), (With<Agent>, Without<MainAgent>)>,
+) {
+    // Only run if station occupancy changed
+    if !station_occupancy.is_changed() {
+        return;
+    }
+
+    for (entity, current_station, mut target) in agents.iter_mut() {
+        if let Some(station) = current_station.station {
+            let base_pos = station_positions.get(station);
+            let orbital_offset = station_occupancy.get_orbital_offset(station, entity);
+            target.position = base_pos + orbital_offset;
+        }
+    }
+}
+
 /// System plugin for agent management
 pub struct AgentPlugin;
 
 impl Plugin for AgentPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<StationPositions>()
+            .init_resource::<StationOccupancy>()
             .add_systems(
                 Startup,
                 spawn_main_agent.after(crate::sprites::generate_sprites),
             )
-            .add_systems(Update, process_events_system);
+            .add_systems(Update, (
+                process_events_system,
+                update_orbital_positions_system.after(process_events_system),
+            ));
     }
 }

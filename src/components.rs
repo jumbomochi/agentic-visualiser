@@ -73,6 +73,25 @@ impl AgentType {
             AgentType::General => "Agent",
         }
     }
+
+    /// Get the home station for this agent type (where they do their primary work)
+    pub fn home_station(&self) -> StationType {
+        match self {
+            AgentType::Main => StationType::Center,
+            AgentType::Explore => StationType::Library,        // Explores files
+            AgentType::Plan => StationType::Desk,              // Plans/writes
+            AgentType::Bash => StationType::Terminal,          // Runs commands
+            AgentType::CodeReviewer => StationType::Library,   // Reviews code (reads)
+            AgentType::UIUXReviewer => StationType::Desk,      // Reviews UI (design)
+            AgentType::StatuslineSetup => StationType::Terminal,
+            AgentType::ClaudeCodeGuide => StationType::Library,
+            AgentType::Haiku => StationType::Center,           // Fast, stays central
+            AgentType::DevopsEngineer => StationType::Terminal, // DevOps = terminal work
+            AgentType::SecurityAnalyst => StationType::Library, // Security = code review
+            AgentType::ProjectManager => StationType::MeetingArea, // Coordinates
+            AgentType::General => StationType::Center,
+        }
+    }
 }
 
 /// Agent component - identifies an entity as an agent
@@ -81,6 +100,12 @@ pub struct Agent {
     pub id: String,
     pub agent_type: AgentType,
     pub tool_use_id: Option<String>,
+}
+
+/// Tracks which station an agent is currently at
+#[derive(Component, Default)]
+pub struct CurrentStation {
+    pub station: Option<StationType>,
 }
 
 /// Types of workstations in the workspace
@@ -192,6 +217,18 @@ pub struct Working {
 /// Agent name label entity
 #[derive(Component)]
 pub struct AgentLabel;
+
+/// Tracks the label stagger index for avoiding label overlap
+#[derive(Component)]
+pub struct LabelStagger {
+    pub index: usize,
+}
+
+impl Default for LabelStagger {
+    fn default() -> Self {
+        LabelStagger { index: 0 }
+    }
+}
 
 /// Status bar UI component
 #[derive(Component)]
